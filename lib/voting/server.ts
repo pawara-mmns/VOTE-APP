@@ -12,6 +12,11 @@ export function voterHash(deviceId: string) {
 export async function snapshot(): Promise<Snapshot | null> {
   const { data, error } = await serverSupabase().rpc("get_voting_snapshot");
   if (error) throw new Error("Snapshot unavailable");
+  if (data && !Array.isArray(data.options)) throw new Error("Configurable voting migration required");
+  if (data && (typeof data.session?.ip_protection_enabled !== "boolean" || !Number.isInteger(data.session?.max_votes_per_ip)
+    || !["standard", "strict_code"].includes(data.session?.voting_mode))) {
+    throw new HttpError(503, "The voting database needs migration 003_vote_protection.sql. Ask the organizer to apply it before voting.", "migration_required");
+  }
   return data as Snapshot | null;
 }
 export async function enforceRateLimit(key: string, limit: number, seconds: number) {

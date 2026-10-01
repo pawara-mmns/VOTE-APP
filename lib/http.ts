@@ -1,6 +1,8 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { sameOrigin } from "@/lib/security";
+import { ValidationError } from "@/lib/voting/validation";
+import { AdminConfigurationError } from "@/lib/auth/config";
 
 export class HttpError extends Error {
   constructor(public status: number, message: string, public code?: string) { super(message); }
@@ -9,6 +11,8 @@ export function json(data: unknown, status = 200) {
   return NextResponse.json(data, { status, headers: { "Cache-Control": "no-store" } });
 }
 export function failure(error: unknown) {
+  if (error instanceof AdminConfigurationError) return json({ error: error.message, code: "admin_configuration" }, 503);
+  if (error instanceof ValidationError) return json({ error: error.message, code: "invalid" }, 400);
   if (error instanceof HttpError) {
     const response = json({ error: error.message, code: error.code }, error.status);
     if (error.status === 429) response.headers.set("Retry-After", "60");
@@ -19,7 +23,8 @@ export function failure(error: unknown) {
   return json({ error: "The voting service is temporarily unavailable. Please try again shortly." }, 503);
 }
 export async function readBody(request: Request): Promise<Record<string, unknown>> {
-  if (!sameOrigin(request.headers.get("origin"), request.url, process.env.NEXT_PUBLIC_APP_URL)) {
+  const { NEXT_PUBLIC_APP_URL: configuredUrl } = process.env;
+  if (!sameOrigin(request.headers.get("origin"), request.url, configuredUrl)) {
     throw new HttpError(403, "This request could not be verified. Reload the page and try again.");
   }
   if (!request.headers.get("content-type")?.startsWith("application/json")) {

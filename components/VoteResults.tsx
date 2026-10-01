@@ -1,8 +1,11 @@
-import { GROUPS, totalVotes, type Snapshot } from "@/lib/voting/types";
+import { rankedOptions, totalVotes, type Snapshot } from "@/lib/voting/types";
 import { ResultBar } from "@/components/ResultBar";
 
 export function VoteResults({ data }: { data: Snapshot | null }) {
   const total = totalVotes(data);
-  const max = Math.max(...GROUPS.map((g) => data?.totals[g] ?? 0));
-  return <div className="result-bars">{GROUPS.map((group) => <ResultBar key={group} group={group} count={data?.totals[group] ?? 0} total={total} highlighted={!!data && !data.session.is_open && total > 0 && data.totals[group] === max} final={!!data && !data.session.is_open} />)}</div>;
+  const options = rankedOptions(data?.options ?? []);
+  return <div className={`result-bars ${options.length > 6 ? "many-results" : ""}`}>
+    {data && total === 0 && <p className="waiting-votes">Waiting for votes…</p>}
+    {options.map((option) => <ResultBar key={option.id} option={option} rank={option.rank} total={total} highlighted={!!data && !data.session.is_open && total > 0 && option.rank === 1} />)}
+  </div>;
 }

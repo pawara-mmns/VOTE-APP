@@ -3,9 +3,9 @@
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string) { super(message); }
 }
-export async function api<T>(url: string, body?: Record<string, unknown>): Promise<T> {
+export async function api<T>(url: string, body?: Record<string, unknown>, method?: "POST" | "PATCH" | "DELETE"): Promise<T> {
   const response = await fetch(url, {
-    method: body ? "POST" : "GET",
+    method: method ?? (body ? "POST" : "GET"),
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
     cache: "no-store",

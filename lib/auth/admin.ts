@@ -1,15 +1,12 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { validSession } from "@/lib/security";
+import { readAdminConfig } from "@/lib/auth/config";
 
 export const COOKIE_NAME = "live_vote_admin";
 export function adminConfig() {
-  const password = process.env.ADMIN_PASSWORD;
-  const secret = process.env.ADMIN_SESSION_SECRET;
-  if (!password || password.length < 12 || !secret || secret.length < 32) {
-    throw new Error("Admin requires a 12+ character password and 32+ character session secret");
-  }
-  return { password, secret };
+  const { ADMIN_PASSWORD, ADMIN_SESSION_SECRET } = process.env;
+  return readAdminConfig({ ADMIN_PASSWORD, ADMIN_SESSION_SECRET });
 }
 export async function isAdmin() {
   try {

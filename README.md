@@ -1,6 +1,8 @@
 # LiveVote
 
-A QR-based live event voting app for exactly four groups: A, B, C, and D. Built with Next.js App Router, TypeScript, Tailwind CSS, Supabase PostgreSQL and Realtime. Ready to deploy to Vercel after connecting your Supabase project.
+A QR-based live event voting app with configurable sessions, 2–20 voting options, per-network abuse limits and optional one-time voting codes. Built with Next.js App Router, TypeScript, Tailwind CSS, Supabase PostgreSQL and Realtime. Ready to deploy to Vercel after connecting your Supabase project.
+
+For an already deployed installation, follow **[UPGRADE.md](UPGRADE.md)**. Apply only missing migrations; do not reinstall the original schema. Anti-abuse protection requires migration 003 and the new server-only `IP_HASH_SECRET`.
 
 ## 1. Install
 
@@ -29,24 +31,18 @@ Open Supabase **SQL Editor → New query**. Paste the **entire contents** of:
 supabase/migrations/001_live_voting.sql
 ```
 
+For a fresh project, then run **`supabase/migrations/002_configurable_voting.sql`**, followed by **`supabase/migrations/003_vote_protection.sql`**, each in its own SQL Editor query. Existing installations apply only missing migrations in order. Migration 002 maps existing votes to configurable options; migration 003 adds network protection and strict-code mode while preserving historical votes.
+
 Click **Run**. Run it once on a fresh project. It runs inside a transaction, so a failure rolls back the setup rather than leaving partial tables. It creates:
 
 - `voting_sessions`, `votes`, and `vote_totals` with constraints and RLS.
-- An initial active session named **Event Voting**, initially **CLOSED**, with four zero totals.
+- An initial active session named **Event Voting**, initially **CLOSED**, with zero totals for all configured options.
 - Transactional voting, open/close and new-session RPCs.
 - Private persistent request limits and a lock for concurrent admin operations.
 - Public read policies for only the active session and its totals.
 - A Realtime publication entry for `vote_totals`.
 
-The default event name is **Event Voting**. To customize it, run this in the SQL Editor:
-
-```sql
-update public.voting_sessions
-set name = 'Your Event Title'
-where is_active;
-```
-
-New sessions use the default name. Rename the new active session in the same way when needed.
+Use **Voting Session Settings** in /admin to edit the name, question and description. Use **Voting Options** to add, rename, delete and order 2–20 options while closed and before the first vote. To change options after votes exist, use the new-session form. It closes the old session and preserves its history.
 
 ## 4. Environment variables
 
@@ -62,7 +58,7 @@ PowerShell equivalent:
 Copy-Item .env.example .env.local
 ```
 
-Set all seven variables:
+Set all eight variables:
 
 | Variable | Value | Visibility |
 | --- | --- | --- |
@@ -70,9 +66,10 @@ Set all seven variables:
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon / publishable key | Public |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role / secret key | Server only |
 | `NEXT_PUBLIC_APP_URL` | Full app origin, locally `http://localhost:3000` | Public |
-| `ADMIN_PASSWORD` | A strong password of at least 12 characters | Server only |
+| `ADMIN_PASSWORD` | 8–512 characters; a strong password of 12+ characters is recommended | Server only |
 | `ADMIN_SESSION_SECRET` | A random secret of at least 32 characters | Server only |
 | `VOTER_HASH_SECRET` | A different random secret of at least 32 characters | Server only |
+| `IP_HASH_SECRET` | Another independent random secret of at least 32 characters | Server only |
 
 Generate each secret separately:
 
@@ -80,7 +77,9 @@ Generate each secret separately:
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-Do not commit `.env.local` or real secrets. Keep `VOTER_HASH_SECRET` stable throughout an active session: changing it changes voter hashes and permits a previous browser to vote again. Changing the admin password or session secret invalidates existing admin cookies.
+Do not commit `.env.local` or real secrets. Keep `VOTER_HASH_SECRET` and `IP_HASH_SECRET` stable throughout an active session and consistent across deployments. Changing the voter secret permits a previous browser to vote again. Changing the IP secret changes network quotas and invalidates unused voting codes. Changing the admin password or session secret invalidates existing admin cookies.
+
+If sign-in reports that admin configuration is missing, check the variable named in the message, then restart `npm run dev` or redeploy on Vercel. Passwords of 8–11 characters are accepted for existing installations. Invalid configuration is reported separately from a database outage; no secret values are returned to the browser.
 
 ## 5. Run locally
 
@@ -93,7 +92,7 @@ Open [http://localhost:3000](http://localhost:3000).
 | Route | Purpose |
 | --- | --- |
 | `/` | Projector home, large QR, current status and vote total |
-| `/vote` | Mobile group selection, confirmation and receipt |
+| `/vote` | Mobile option selection, confirmation and receipt |
 | `/results` | Live totals, percentages and smooth result bars |
 | `/admin` | Server-authenticated organizer controls |
 
@@ -115,17 +114,29 @@ Tests run the actual SQL migration in an isolated, in-memory PostgreSQL engine (
 
 After building, `npm run test:integration` launches the production Next.js server on an isolated local port and exercises the actual HTTP routes against that PostgreSQL migration through a test-only RPC adapter. It checks protected admin access, cookie attributes, same-origin protection, vote bursts, close/open, session rollover, historical hashes and logout. It uses temporary in-memory test data and test credentials, and stops its servers afterwards. It does not connect to your Supabase account.
 
+The integration suite also initializes an isolated temporary PostgreSQL cluster when `initdb`, `pg_ctl` and `psql` are on PATH. Separate database connections verify concurrent network quotas and one-time code consumption. That test is skipped when these optional tools are absent. On Windows, a sandbox may require approval to start this local server. Existing local databases are never used.
+
+### Anti-abuse settings
+
+In `/admin`, **Anti-Abuse Protection** keeps device protection enabled, lets you turn IP protection ON/OFF, and accepts a **Maximum Votes Per Network** from 1 to 100 (default 5). These network settings can change during voting. A Wi-Fi, office, campus or carrier network may serve many legitimate voters; increase the limit appropriately. Turning IP protection off preserves device checks and continues counting network votes, so re-enabling it uses all known votes in that session.
+
+Select **Strict Code** while the session is closed and has no votes. Generate 1–1,000 six-character codes per batch, up to 10,000 per session, and download them immediately. Codes are only displayed for the generated batch; Supabase stores HMAC hashes, never plain codes. Give exactly one code to each participant. `/vote` requires a code in strict mode; code consumption, device uniqueness, network quota and totals commit together. Failed votes leave the code available. A used code stays unusable after clearing storage or changing IP. Device protection still limits each browser to one vote per session.
+
+The server trusts forwarded IP headers only when running on Vercel, preferring `x-vercel-forwarded-for`, then `x-forwarded-for`, then `x-real-ip`. Vercel documents these [platform request headers](https://vercel.com/docs/headers/request-headers). IPv4, compressed IPv6 and IPv4-mapped IPv6 are normalized before HMAC hashing. Body-supplied IPs and hashes are ignored. Local development ignores forwarded headers and treats all voters as one loopback network; increase the quota for a rehearsal. A production server outside Vercel fails closed until a trusted IP source is implemented.
+
+Standard mode limits abuse rather than proving participant identity: a different network and a new device identity may still obtain a vote. Strict mode prevents code reuse; issue one code per person for participant-level control. Historical votes with unknown IPs remain unchanged and are excluded from network counts. Neither raw IPs nor network/code hashes are sent to participants or published in Realtime.
+
 For a production-mode preview, use `npm run build` then `npm start`. Production admin cookies require HTTPS, so use `npm run dev` for admin testing on localhost HTTP.
 
 ### Event rehearsal
 
 1. Open `/` and confirm the printed QR URL is your deployed `/vote` URL.
 2. Open `/results` on the projector and `/admin` in a separate tab. Sign in and open voting.
-3. Scan the QR on a phone. Select a group; confirm that selection alone does not submit. Press **Confirm vote**. Check the success receipt and live results.
+3. Scan the QR on a phone. Select an option; confirm that selection alone does not submit. Press **Confirm vote**. Check the success receipt and live results.
 4. Reload `/vote`: it shows that this browser already voted. Clearing only the receipt key still cannot bypass the database's unique voter constraint. Use another browser to test another vote.
 5. Close voting. Confirm a fresh participant sees the closed message and cannot submit. Ties for the highest positive total are highlighted equally; no winner is highlighted while voting is open, or when all totals are zero.
-6. Start a new session, confirm the dialog, and check four zero totals. It starts CLOSED; click **Open voting**. The same phone can now vote again. Old votes remain in the database.
-7. Briefly disconnect the results display from the internet. Reconnect and verify totals recover. The app uses one `vote_totals` Realtime subscription, coalesces event bursts, and reconciles every 20 seconds when connected or every 5 seconds when disconnected. It never refreshes the whole page.
+6. Start a new session, confirm the dialog, and check zero totals for all configured options. It starts CLOSED; click **Open voting**. The same phone can now vote again. Old votes remain in the database.
+7. Briefly disconnect the results display from the internet. Reconnect and verify totals recover. The app uses one `vote_totals` Realtime subscription, coalesces event bursts, and reconciles every 5 seconds. It never refreshes the whole page.
 
 ## 6. Vercel deployment
 
@@ -163,10 +174,10 @@ If Realtime is unavailable, the app shows **Syncing automatically** and uses sna
 
 - The device ID is generated with `crypto.randomUUID()` and stored under `qr_voting_device_id` in localStorage. The server stores only an HMAC-SHA-256 hash, keyed with `VOTER_HASH_SECRET`. There is no IP-based voter blocking.
 - **One vote per browser/device is lightweight event protection. Clearing browser data, using another browser/profile, or switching devices can bypass it. This is not an election-grade identity system.**
-- `(session_id, voter_hash)` is unique in PostgreSQL. The cast RPC validates the group and the expected active session, takes a shared session lock, and inserts a vote. Its trigger increments the matching total in the same transaction. Close/reset waits for in-flight votes, and admin operations serialize through a singleton lock.
+- `(session_id, voter_hash)` is unique in PostgreSQL. The cast RPC validates the option ID, configuration revision and expected active session, takes a shared session lock, and inserts a vote. Its trigger increments the matching total in the same transaction. Close/reset waits for in-flight votes, and admin operations serialize through a singleton lock.
 - Mutation RPCs are callable only by the server's service role. Public roles can neither insert votes nor access raw votes or historical sessions. History is accessible to the organizer through the trusted Supabase SQL Editor.
 - Server mutations require a matching Origin and JSON content type. Request bodies are limited to 4 KiB. Admin passwords never reach client code; only the submitted login password is sent over HTTPS. Cookies are signed with a random nonce, expire after eight hours, and become invalid when the password or signing secret changes. Logout removes the browser cookie; a stolen copy of a stateless cookie remains valid until expiry or credential rotation.
-- Persistent limits allow 15 vote requests per browser hash per minute, 10 admin login attempts per source per minute (using Vercel's trusted forwarding header; a shared bucket locally), 200 login attempts globally per minute, and 30 authenticated admin actions per minute. Limits are stored privately, work across Vercel instances, and expire old buckets opportunistically. They do not stop someone generating fresh browser IDs; for unusually large or exposed events, configure hosting-level traffic limits.
+- Persistent limits allow 15 vote requests per browser hash per minute, 10 admin login attempts per source per minute (using Vercel's trusted forwarding header; a shared bucket locally), 200 login attempts globally per minute, and 60 authenticated admin actions per minute. Limits are stored privately, work across Vercel instances, and expire old buckets opportunistically. They do not stop someone generating fresh browser IDs; for unusually large or exposed events, configure hosting-level traffic limits.
 - Requests fail closed when Supabase is unreachable. Clients show friendly errors and allow retries; retries after an uncertain response cannot add a second vote to the same session.
 - Vote totals are integer counters. Percentages are rounded to one decimal place and may sum to 99.9% or 100.1%. This does not affect exact vote counts.
 - No real credentials are included. You must create Supabase, run the migration, populate environment variables, and deploy before hosted voting or Realtime can be verified.
@@ -186,4 +197,4 @@ tests/                       SQL and security verification
 .env.example                 Environment template without secrets
 ```
 
-API routes: `GET /api/session`, `POST /api/vote`, and `POST /api/admin/login`, `/logout`, `/open`, `/close`, `/new-session`. Mutation requests require `Content-Type: application/json` and a matching `Origin`; protected admin operations also require the admin session cookie. Vote payload: `{ "sessionId": "uuid", "deviceId": "uuid", "group": "A" }`. New-session payload: `{ "confirm": true }`. Other admin actions use `{}`.
+API routes: `GET /api/session`, `POST /api/vote`, and `POST /api/admin/login`, `/logout`, `/open`, `/close`, `/new-session`. Mutation requests require `Content-Type: application/json` and a matching `Origin`; protected admin operations also require the admin session cookie. Vote payload: `{ "sessionId": "uuid", "deviceId": "uuid", "optionId": "uuid", "optionsRevision": 0 }`. New-session payload includes `sessionId` (or null if none exists), `name`, `question`, optional `description`, an `options` array of names, and `confirm: true`. Open/close use `sessionId`; closing also requires `confirm: true`. Admin settings use `PATCH /api/admin/session`; option CRUD and reordering live under `/api/admin/options`. See [UPGRADE.md](UPGRADE.md).

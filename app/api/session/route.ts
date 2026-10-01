@@ -5,6 +5,6 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     const data = await snapshot();
-    return data ? json(data) : json({ error: "There is no active voting session. Please check with the organizer." }, 404);
+    return data ? json(data) : json({ error: "No active voting session. Create a session from the Admin Dashboard.", code: "no_session" }, 404);
   } catch (error) { return failure(error); }
 }
